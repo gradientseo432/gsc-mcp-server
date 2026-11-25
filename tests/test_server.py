@@ -99,7 +99,7 @@ def test_inspect_url(fake):
 
 
 def test_invalid_dimension_rejected(fake):
-    with pytest.raises(Exception):
+    with pytest.raises(Exception, match="Invalid dimensions"):
         call("search_analytics", site_url="x", start_date="2026-01-01", end_date="2026-01-28", dimensions=["nope"])
 
 

@@ -7,10 +7,15 @@ from __future__ import annotations
 
 from datetime import date
 
+import functools
+
+from googleapiclient.errors import HttpError
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from . import analysis as an
 from . import __version__
+from .auth import AuthError
 from .client import GSCClient
 
 mcp = MCPServer(
@@ -24,6 +29,22 @@ mcp = MCPServer(
     ),
 )
 client = GSCClient()  # replaced in tests
+
+
+def tool(fn):
+    """Register an MCP tool. Anticipated failures (bad arguments, missing auth, Google API errors) become
+    ToolError so the model sees the real message; in mcp 2.x any other exception is reported only as
+    'Error executing tool <name>'."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (ValueError, AuthError) as e:
+            raise ToolError(str(e)) from e
+        except HttpError as e:
+            raise ToolError(f"Google API error {getattr(e.resp, 'status', '?')}: {e._get_reason()}") from e
+
+    return mcp.tool()(wrapper)
 
 MAX_ROWS = 200
 
@@ -52,13 +73,13 @@ def _fetch(site_url: str, start: date, end: date, dims: list[str], row_limit: in
     return an.flatten(raw, dims)
 
 
-@mcp.tool()
+@tool
 def list_sites() -> list[dict]:
     """List the Search Console properties the authorized account can read, with permission level."""
     return client.list_sites()
 
 
-@mcp.tool()
+@tool
 def search_analytics(site_url: str, start_date: str, end_date: str, dimensions: list[str] | None = None,
                      row_limit: int = 50, search_type: str = "web", page_contains: str | None = None,
                      query_contains: str | None = None, country: str | None = None, device: str | None = None) -> dict:
@@ -79,14 +100,14 @@ def _top(dim: str, site_url: str, days: int, limit: int, **flt) -> dict:
     return {"range": [start.isoformat(), end.isoformat()], "rows": [an.pretty(r) for r in rows]}
 
 
-@mcp.tool()
+@tool
 def top_queries(site_url: str, days: int = 28, limit: int = 25, page_contains: str | None = None,
                 country: str | None = None, device: str | None = None) -> dict:
     """Top queries by clicks over the last `days` days (optionally for pages containing a path)."""
     return _top("query", site_url, days, limit, page_contains=page_contains, country=country, device=device)
 
 
-@mcp.tool()
+@tool
 def top_pages(site_url: str, days: int = 28, limit: int = 25, query_contains: str | None = None,
               country: str | None = None, device: str | None = None) -> dict:
     """Top pages by clicks over the last `days` days (optionally for queries containing a term)."""
@@ -103,7 +124,7 @@ def _two_periods(site_url: str, dim: str, days: int, page_contains: str | None):
     return an.compare(cur, prev, [dim]), meta
 
 
-@mcp.tool()
+@tool
 def compare_periods(site_url: str, dimension: str = "page", days: int = 28, limit: int = 25,
                     sort_by: str = "clicks_delta", page_contains: str | None = None) -> dict:
     """Compare the last `days` days with the previous period of equal length (page or query).
@@ -123,7 +144,7 @@ def compare_periods(site_url: str, dimension: str = "page", days: int = 28, limi
     return {**meta, "rows": [an.pretty(r) for r in rows[:_cap(limit)]]}
 
 
-@mcp.tool()
+@tool
 def traffic_drops(site_url: str, dimension: str = "page", days: int = 28, min_prev_clicks: int = 10,
                   min_drop_pct: float = 30.0, limit: int = 25, page_contains: str | None = None) -> dict:
     """Pages (or queries) that lost at least `min_drop_pct` % of clicks versus the previous period.
@@ -137,7 +158,7 @@ def traffic_drops(site_url: str, dimension: str = "page", days: int = 28, min_pr
     return {**meta, "found": len(drops), "rows": [an.pretty(r) for r in drops[:_cap(limit)]]}
 
 
-@mcp.tool()
+@tool
 def ctr_opportunities(site_url: str, days: int = 28, min_impressions: int = 100, limit: int = 25,
                       dimension: str = "query", page_contains: str | None = None) -> dict:
     """Queries (or pages) with a CTR far below what this site gets at the same position.
@@ -154,7 +175,7 @@ def ctr_opportunities(site_url: str, days: int = 28, min_impressions: int = 100,
             "rows": [an.pretty(r) for r in found[:_cap(limit)]]}
 
 
-@mcp.tool()
+@tool
 def striking_distance(site_url: str, days: int = 28, min_impressions: int = 50, pos_min: float = 8.0,
                       pos_max: float = 20.0, limit: int = 25, dimension: str = "query",
                       page_contains: str | None = None) -> dict:
@@ -168,7 +189,7 @@ def striking_distance(site_url: str, days: int = 28, min_impressions: int = 50, 
             "rows": [an.pretty(r) for r in found[:_cap(limit)]]}
 
 
-@mcp.tool()
+@tool
 def position_buckets(site_url: str, days: int = 28, dimension: str = "query") -> dict:
     """Distribution of queries (or pages) by average position: 1-3, 4-10, 11-20, 21-50, 51+."""
     if dimension not in ("page", "query"):
@@ -178,7 +199,7 @@ def position_buckets(site_url: str, days: int = 28, dimension: str = "query") ->
     return {"range": [start.isoformat(), end.isoformat()], "buckets": an.position_buckets(rows)}
 
 
-@mcp.tool()
+@tool
 def keyword_cannibalization(site_url: str, days: int = 28, min_impressions: int = 50, min_share: float = 0.1,
                             limit: int = 20) -> dict:
     """Queries where two or more pages each hold at least `min_share` of the impressions (possible cannibalization)."""
@@ -188,7 +209,7 @@ def keyword_cannibalization(site_url: str, days: int = 28, min_impressions: int 
     return {"range": [start.isoformat(), end.isoformat()], "found": len(found), "rows": found[:_cap(limit, 100)]}
 
 
-@mcp.tool()
+@tool
 def inspect_url(site_url: str, url: str, language: str = "en-US") -> dict:
     """URL Inspection: index status, last crawl, canonical chosen by Google, mobile usability, rich results."""
     r = client.inspect_url(site_url, url, language)

@@ -7,6 +7,9 @@ or *"which queries are one push away from page one?"* directly from your own Sea
 It is not a thin wrapper around the API: besides raw queries it ships the analyses an SEO actually runs, computed
 server-side so the model gets a short, ranked answer instead of 25,000 rows.
 
+> **Status:** v0.1. The analysis logic and the server are covered by 15 offline tests (fake Google service). The OAuth flow and
+> live API calls have not been exercised end to end yet: run `gsc-mcp-server auth`, then `list_sites`, before relying on results.
+
 ## Tools
 
 | Tool | What it answers |
